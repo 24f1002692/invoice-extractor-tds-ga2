@@ -62,17 +62,49 @@ def extract_date(text: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+CURRENCY_NEAR_AMOUNT_RE = re.compile(
+    r"(?:USD|EUR|GBP|\$|€|£)\s?([\d,]+\.\d{1,2})", re.IGNORECASE
+)
+DECIMAL_AMOUNT_RE = re.compile(r"\d+(?:,\d{3})*\.\d{1,2}\b")
+
+
 def extract_amount(text: str) -> Optional[float]:
-    # prefer a number that sits near an amount/total/due keyword
+    # 1) number sitting right next to a currency symbol/code, e.g. "USD 3,602.32"
+    m = CURRENCY_NEAR_AMOUNT_RE.search(text)
+    if m:
+        try:
+            return float(m.group(1).replace(",", ""))
+        except ValueError:
+            pass
+
+    # 2) number on a line with an amount/total/due keyword
     for line in text.splitlines():
         if re.search(r"amount|total|due|balance", line, re.IGNORECASE):
+            # prefer a decimal-looking number on that line over a bare integer
+            dm = DECIMAL_AMOUNT_RE.search(line.replace(",", ""))
+            if dm:
+                try:
+                    return float(dm.group(0))
+                except ValueError:
+                    pass
             m = AMOUNT_RE.search(line.replace(",", ""))
             if m:
                 try:
                     return float(m.group(0))
                 except ValueError:
                     pass
-    # fallback: any plausible number in the whole text
+
+    # 3) fallback: any decimal-looking number anywhere (invoice/order IDs are
+    #    almost always plain integers, so decimals are much more likely to be
+    #    a currency amount)
+    decimal_candidates = [
+        float(x.replace(",", "")) for x in DECIMAL_AMOUNT_RE.findall(text.replace(",", ""))
+    ]
+    decimal_candidates = [c for c in decimal_candidates if 0 < c < 1_000_000]
+    if decimal_candidates:
+        return decimal_candidates[0]
+
+    # 4) last resort: any plausible plain number
     candidates = [float(x.replace(",", "")) for x in AMOUNT_RE.findall(text)]
     candidates = [c for c in candidates if 0 < c < 1_000_000]
     return candidates[0] if candidates else None
